@@ -780,7 +780,7 @@ namespace ts {
                 enableSubstitutionsForBlockScopedBindings();
             }
 
-            const extendsClauseElement = getEffectiveBaseTypeNode(node);
+            const extendsClauseElement = getClassExtendsHeritageElement(node);
             const classFunction = createFunctionExpression(
                 /*modifiers*/ undefined,
                 /*asteriskToken*/ undefined,
@@ -1350,8 +1350,8 @@ namespace ts {
          *                                          part of a constructor declaration with a
          *                                          synthesized call to `super`
          */
-        function shouldAddRestParameter(node: ParameterDeclaration | undefined, inConstructorWithSynthesizedSuper: boolean) {
-            return node && node.dotDotDotToken && node.name.kind === SyntaxKind.Identifier && !inConstructorWithSynthesizedSuper;
+        function shouldAddRestParameter(node: ParameterDeclaration | undefined, inConstructorWithSynthesizedSuper: boolean): node is ParameterDeclaration {
+            return !!(node && node.dotDotDotToken && !inConstructorWithSynthesizedSuper);
         }
 
         /**
@@ -1370,11 +1370,11 @@ namespace ts {
             }
 
             // `declarationName` is the name of the local declaration for the parameter.
-            const declarationName = getMutableClone(<Identifier>parameter!.name);
+            const declarationName = parameter.name.kind === SyntaxKind.Identifier ? getMutableClone(parameter.name) : createTempVariable(/*recordTempVariable*/ undefined);
             setEmitFlags(declarationName, EmitFlags.NoSourceMap);
 
             // `expressionName` is the name of the parameter used in expressions.
-            const expressionName = getSynthesizedClone(<Identifier>parameter!.name);
+            const expressionName = parameter.name.kind === SyntaxKind.Identifier ? getSynthesizedClone(parameter.name) : declarationName;
             const restIndex = node.parameters.length - 1;
             const temp = createLoopVariable();
 
@@ -1439,6 +1439,24 @@ namespace ts {
             setEmitFlags(forStatement, EmitFlags.CustomPrologue);
             startOnNewLine(forStatement);
             statements.push(forStatement);
+
+            if (parameter.name.kind !== SyntaxKind.Identifier) {
+                // do the actual destructuring of the rest parameter if necessary
+                statements.push(
+                    setEmitFlags(
+                        setTextRange(
+                            createVariableStatement(
+                                /*modifiers*/ undefined,
+                                createVariableDeclarationList(
+                                    flattenDestructuringBinding(parameter, visitor, context, FlattenLevel.All, expressionName),
+                                )
+                            ),
+                            parameter
+                        ),
+                        EmitFlags.CustomPrologue
+                    )
+                );
+            }
         }
 
         /**
@@ -3729,7 +3747,7 @@ namespace ts {
         function visitCallExpressionWithPotentialCapturedThisAssignment(node: CallExpression, assignToCapturedThis: boolean): CallExpression | BinaryExpression {
             // We are here either because SuperKeyword was used somewhere in the expression, or
             // because we contain a SpreadElementExpression.
-            if (node.transformFlags & TransformFlags.ContainsSpread ||
+            if (node.transformFlags & TransformFlags.ContainsRestOrSpread ||
                 node.expression.kind === SyntaxKind.SuperKeyword ||
                 isSuperProperty(skipOuterExpressions(node.expression))) {
 
@@ -3739,7 +3757,7 @@ namespace ts {
                 }
 
                 let resultingCall: CallExpression | BinaryExpression;
-                if (node.transformFlags & TransformFlags.ContainsSpread) {
+                if (node.transformFlags & TransformFlags.ContainsRestOrSpread) {
                     // [source]
                     //      f(...a, b)
                     //      x.m(...a, b)
@@ -3802,7 +3820,7 @@ namespace ts {
          * @param node A NewExpression node.
          */
         function visitNewExpression(node: NewExpression): LeftHandSideExpression {
-            if (node.transformFlags & TransformFlags.ContainsSpread) {
+            if (node.transformFlags & TransformFlags.ContainsRestOrSpread) {
                 // We are here because we contain a SpreadElementExpression.
                 // [source]
                 //      new C(...a)
@@ -4376,7 +4394,7 @@ namespace ts {
                         ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
                         function (d, b) { for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p]; };
                     return extendStatics(d, b);
-                }
+                };
 
                 return function (d, b) {
                     extendStatics(d, b);
